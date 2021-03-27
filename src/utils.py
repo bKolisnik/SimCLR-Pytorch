@@ -201,7 +201,7 @@ def experiment_config(parser, args):
     # create all save dirs
     args.model_dir = os.path.join(run_dir, run_name)
 
-    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(args.model_dir, exist_ok=True)
 
     args.summaries_dir = os.path.join(args.model_dir, 'summaries')
     args.checkpoint_dir = os.path.join(args.model_dir, 'checkpoint.pt')
