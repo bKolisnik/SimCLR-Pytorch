@@ -199,12 +199,12 @@ def experiment_config(parser, args):
     run_name = time.strftime("%Y-%m-%d_%H-%M-%S")
 
     # create all save dirs
-    model_dir = os.path.join(run_dir, run_name)
+    args.model_dir = os.path.join(run_dir, run_name)
 
     os.makedirs(model_dir, exist_ok=True)
 
-    args.summaries_dir = os.path.join(model_dir, 'summaries')
-    args.checkpoint_dir = os.path.join(model_dir, 'checkpoint.pt')
+    args.summaries_dir = os.path.join(args.model_dir, 'summaries')
+    args.checkpoint_dir = os.path.join(args.model_dir, 'checkpoint.pt')
 
     if not args.finetune:
         args.load_checkpoint_dir = args.checkpoint_dir
