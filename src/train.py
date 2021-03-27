@@ -73,7 +73,12 @@ def pretrain(encoder, mlp, dataloaders, args):
                 activities=[
                         torch.profiler.ProfilerActivity.CPU,
                         torch.profiler.ProfilerActivity.CUDA],
-                    profile_memory=True
+                    profile_memory=True,
+                    schedule=torch.profiler.schedule(
+                    wait=14,
+                    warmup=0,
+                    active=1,
+                    repeat=0)
             ) as p:
                 with torch.profiler.record_function("model_pretraining_epoch"):
                 
@@ -110,6 +115,8 @@ def pretrain(encoder, mlp, dataloaders, args):
                         sample_count += inputs.size(0)
 
                         run_loss += loss.item()
+
+                        p.step()
 
                     epoch_pretrain_loss = run_loss / len(dataloaders['pretrain'])
 
@@ -446,33 +453,86 @@ def finetune(encoder, mlp, dataloaders, args):
     patience_counter = 0
 
 
-    with torch.profiler.profile(
-        activities=[
-            torch.profiler.ProfilerActivity.CPU,
-            torch.profiler.ProfilerActivity.CUDA],
-        profile_memory=True
-    ) as p:
+    ''' Pretrain loop '''
+    for epoch in range(args.finetune_epochs):
 
-        ''' Pretrain loop '''
-        for epoch in range(args.finetune_epochs):
+        # Freeze the encoder, train classification head
+        encoder.eval()
+        mlp.train()
 
-            # Freeze the encoder, train classification head
-            encoder.eval()
-            mlp.train()
+        sample_count = 0
+        run_loss = 0
+        run_top1 = 0.0
+        run_top5 = 0.0
 
-            sample_count = 0
-            run_loss = 0
-            run_top1 = 0.0
-            run_top5 = 0.0
+        # Print setup for distributed only printing on one node.
+        if args.print_progress:
+            logging.info('\nEpoch {}/{}:\n'.format(epoch+1, args.finetune_epochs))
+            # tqdm for process (rank) 0 only when using distributed training
+            train_dataloader = tqdm(dataloaders['train'])
+        else:
+            train_dataloader = dataloaders['train']
 
-            # Print setup for distributed only printing on one node.
-            if args.print_progress:
-                logging.info('\nEpoch {}/{}:\n'.format(epoch+1, args.finetune_epochs))
-                # tqdm for process (rank) 0 only when using distributed training
-                train_dataloader = tqdm(dataloaders['train'])
-            else:
-                train_dataloader = dataloaders['train']
 
+        if(epoch == args.finetune_epochs - 1):
+
+
+            with torch.profiler.profile(
+                    activities=[
+                            torch.profiler.ProfilerActivity.CPU,
+                            torch.profiler.ProfilerActivity.CUDA],
+                        profile_memory=True,
+                        schedule=torch.profiler.schedule(
+                        wait=14,
+                        warmup=0,
+                        active=1,
+                        repeat=0)
+            ) as p:
+
+                ''' epoch loop '''
+                for i, (inputs, target) in enumerate(train_dataloader):
+
+                    inputs = inputs.cuda(non_blocking=True)
+
+                    target = target.cuda(non_blocking=True)
+
+                    # Forward pass
+                    optimiser.zero_grad()
+
+                    # Do not compute the gradients for the frozen encoder
+                    with torch.no_grad():
+                        h = encoder(inputs)
+
+                    # Take pretrained encoder representations
+                    output = mlp(h)
+
+                    loss = criterion(output, target)
+
+                    loss.backward()
+
+                    optimiser.step()
+
+                    torch.cuda.synchronize()
+
+                    sample_count += inputs.size(0)
+
+                    run_loss += loss.item()
+
+                    predicted = output.argmax(1)
+
+                    acc = (predicted == target).sum().item() / target.size(0)
+
+                    run_top1 += acc
+
+                    _, output_topk = output.topk(5, 1, True, True)
+
+                    acc_top5 = (output_topk == target.view(-1, 1).expand_as(output_topk)
+                                ).sum().item() / target.size(0)  # num corrects
+
+                    run_top5 += acc_top5
+
+                    p.step()
+        else:
             ''' epoch loop '''
             for i, (inputs, target) in enumerate(train_dataloader):
 
@@ -515,70 +575,70 @@ def finetune(encoder, mlp, dataloaders, args):
 
                 run_top5 += acc_top5
 
-            epoch_finetune_loss = run_loss / len(dataloaders['train'])  # sample_count
+        epoch_finetune_loss = run_loss / len(dataloaders['train'])  # sample_count
 
-            epoch_finetune_acc = run_top1 / len(dataloaders['train'])
+        epoch_finetune_acc = run_top1 / len(dataloaders['train'])
 
-            epoch_finetune_acc_top5 = run_top5 / len(dataloaders['train'])
+        epoch_finetune_acc_top5 = run_top5 / len(dataloaders['train'])
 
-            ''' Update Schedulers '''
-            # Decay lr with CosineAnnealingLR
-            lr_decay.step()
+        ''' Update Schedulers '''
+        # Decay lr with CosineAnnealingLR
+        lr_decay.step()
 
-            ''' Printing '''
-            if args.print_progress:  # only validate using process 0
-                logging.info('\n[Finetune] loss: {:.4f},\t acc: {:.4f}, \t acc_top5: {:.4f}\n'.format(
-                    epoch_finetune_loss, epoch_finetune_acc, epoch_finetune_acc_top5))
+        ''' Printing '''
+        if args.print_progress:  # only validate using process 0
+            logging.info('\n[Finetune] loss: {:.4f},\t acc: {:.4f}, \t acc_top5: {:.4f}\n'.format(
+                epoch_finetune_loss, epoch_finetune_acc, epoch_finetune_acc_top5))
 
-                args.writer.add_scalars('finetune_epoch_loss', {'train': epoch_finetune_loss}, epoch+1)
-                args.writer.add_scalars('finetune_epoch_acc', {'train': epoch_finetune_acc}, epoch+1)
-                args.writer.add_scalars('finetune_epoch_acc_top5', {
-                                        'train': epoch_finetune_acc_top5}, epoch+1)
-                args.writer.add_scalars(
-                    'finetune_lr', {'train': optimiser.param_groups[0]['lr']}, epoch+1)
+            args.writer.add_scalars('finetune_epoch_loss', {'train': epoch_finetune_loss}, epoch+1)
+            args.writer.add_scalars('finetune_epoch_acc', {'train': epoch_finetune_acc}, epoch+1)
+            args.writer.add_scalars('finetune_epoch_acc_top5', {
+                                    'train': epoch_finetune_acc_top5}, epoch+1)
+            args.writer.add_scalars(
+                'finetune_lr', {'train': optimiser.param_groups[0]['lr']}, epoch+1)
 
-            valid_loss, valid_acc, valid_acc_top5 = evaluate(
-                encoder, mlp, dataloaders, 'valid', epoch, args)
+        valid_loss, valid_acc, valid_acc_top5 = evaluate(
+            encoder, mlp, dataloaders, 'valid', epoch, args)
 
-            # For the best performing epoch, reset patience and save model,
-            # else update patience.
-            if valid_acc >= best_valid_acc:
-                patience_counter = 0
-                best_epoch = epoch + 1
-                best_valid_acc = valid_acc
+        # For the best performing epoch, reset patience and save model,
+        # else update patience.
+        if valid_acc >= best_valid_acc:
+            patience_counter = 0
+            best_epoch = epoch + 1
+            best_valid_acc = valid_acc
 
-                # saving using process (rank) 0 only as all processes are in sync
+            # saving using process (rank) 0 only as all processes are in sync
 
-                state = {
-                    #'args': args,
-                    'encoder': encoder.state_dict(),
-                    'supp_mlp': mlp.state_dict(),
-                    'optimiser': optimiser.state_dict(),
-                    'epoch': epoch
-                }
+            state = {
+                #'args': args,
+                'encoder': encoder.state_dict(),
+                'supp_mlp': mlp.state_dict(),
+                'optimiser': optimiser.state_dict(),
+                'epoch': epoch
+            }
 
-                torch.save(state, (args.checkpoint_dir[:-3] + "_finetune.pt"))
-            else:
-                patience_counter += 1
-                if patience_counter == (args.patience - 10):
-                    logging.info('\nPatience counter {}/{}.'.format(
-                        patience_counter, args.patience))
-                elif patience_counter == args.patience:
-                    logging.info('\nEarly stopping... no improvement after {} Epochs.'.format(
-                        args.patience))
-                    break
+            torch.save(state, (args.checkpoint_dir[:-3] + "_finetune.pt"))
+        else:
+            patience_counter += 1
+            if patience_counter == (args.patience - 10):
+                logging.info('\nPatience counter {}/{}.'.format(
+                    patience_counter, args.patience))
+            elif patience_counter == args.patience:
+                logging.info('\nEarly stopping... no improvement after {} Epochs.'.format(
+                    args.patience))
+                break
 
-            epoch_finetune_loss = None  # reset loss
-            epoch_finetune_acc = None
-            epoch_finetune_acc_top5 = None
+        epoch_finetune_loss = None  # reset loss
+        epoch_finetune_acc = None
+        epoch_finetune_acc_top5 = None
 
-        table = p.key_averages().table(
-            sort_by="self_cuda_time_total", row_limit=-1)
-        print(table)
+    table = p.key_averages().table(
+        sort_by="self_cuda_time_total", row_limit=-1)
+    print(table)
 
-        #write table to txt file
-        with open(os.path.join(args.model_dir, 'profiler_finetune.txt'), 'w') as profiler_log:
-            profiler_log.write(table)
+    #write table to txt file
+    with open(os.path.join(args.model_dir, 'profiler_finetune.txt'), 'w') as profiler_log:
+        profiler_log.write(table)
         
 
     del state
