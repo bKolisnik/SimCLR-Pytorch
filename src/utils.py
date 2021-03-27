@@ -212,12 +212,12 @@ def experiment_config(parser, args):
     os.makedirs(args.summaries_dir, exist_ok=True)
 
     # save hyperparameters in .txt file
-    with open(os.path.join(model_dir, 'hyperparams.txt'), 'w') as logs:
+    with open(os.path.join(args.model_dir, 'hyperparams.txt'), 'w') as logs:
         for key, value in vars(args).items():
             logs.write('--{0}={1} \n'.format(str(key), str(value)))
 
     # save config file used in .txt file
-    with open(os.path.join(model_dir, 'config.txt'), 'w') as logs:
+    with open(os.path.join(args.model_dir, 'config.txt'), 'w') as logs:
         # Remove the string from the blur_sigma value list
         config = parser.format_values().replace("'", "")
         # Remove the first line, path to original config file
@@ -228,7 +228,7 @@ def experiment_config(parser, args):
     [logging.root.removeHandler(handler) for handler in logging.root.handlers[:]]
     # info logger for saving command line outputs during training
     logging.basicConfig(level=logging.INFO, format='%(message)s',
-                        handlers=[logging.FileHandler(os.path.join(model_dir, 'trainlogs.txt')),
+                        handlers=[logging.FileHandler(os.path.join(args.model_dir, 'trainlogs.txt')),
                                   logging.StreamHandler()])
     return args
 
