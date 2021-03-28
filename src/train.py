@@ -168,7 +168,7 @@ def pretrain(encoder, mlp, dataloaders, args):
                     epoch_pretrain_loss = None  # reset loss
 
 
-                print(p.function_events)
+                #print(p.function_events)
                 table = p.key_averages().table(
                     sort_by="self_cuda_time_total", row_limit=-1, top_level_events_only=True)
                 print(table)
