@@ -334,7 +334,6 @@ def save_events_table(
         headers.append('Node ID')
 
     # Have to use a list because nonlocal is Py3 only...
-    row_format_lst = [""]
     MAX_STACK_ENTRY = 5
 
     def auto_scale_flops(flops):
@@ -375,10 +374,6 @@ def save_events_table(
             headers = headers + ['Source Location']
         writer.writerow(headers)
 
-        row_format = row_format_lst[0]
-        header_sep = header_sep_lst[0]
-        line_length = line_length_lst[0]
-        add_column = None  # type: ignore
 
         # Have to use a list because nonlocal is Py3 only...
         result = []
@@ -455,7 +450,6 @@ def save_events_table(
                 if len(evt.stack) > 0:
                     src_field = evt.stack[0]
                 row_values.append(src_field)
-            append(row_format.format(*row_values))
 
             writer.wrierow(row_values)
 
