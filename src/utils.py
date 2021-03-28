@@ -274,6 +274,7 @@ def print_network(model, args):
 def save_events_table(
         events,
         path,
+        times_path=None,
         sort_by=None,
         header=None,
         row_limit=100,
@@ -454,7 +455,7 @@ def save_events_table(
 
             writer.writerow(row_values)
 
-
-    with open(os.path.join(args.model_dir, 'final_times.txt'), 'w') as profiler_log:
-        profiler_log.write("Self CPU time total: {}".format(format_time(sum_self_cpu_time_total)))
-        profiler_log.write("Self CUDA time total: {}".format(format_time(sum_self_cuda_time_total)))
+    if times_path is not None:
+        with open(times_path, 'w') as profiler_log:
+            profiler_log.write("Self CPU time total: {}".format(format_time(sum_self_cpu_time_total)))
+            profiler_log.write("Self CUDA time total: {}".format(format_time(sum_self_cuda_time_total)))
