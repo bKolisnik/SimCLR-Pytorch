@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from model.losses import SimclrCriterion
 from optimisers import get_optimiser
+from utils import save_events_table
 
 def pretrain(encoder, mlp, dataloaders, args):
     ''' Pretrain script - SimCLR
@@ -167,15 +168,19 @@ def pretrain(encoder, mlp, dataloaders, args):
                     epoch_pretrain_loss = None  # reset loss
 
 
-
+                print(p.function_events)
                 table = p.key_averages().table(
-                    sort_by="self_cuda_time_total", row_limit=-1)
+                    sort_by="self_cuda_time_total", row_limit=-1, top_level_events_only=True)
                 print(table)
 
 
                 #write table to txt file
                 with open(os.path.join(args.model_dir, 'profiler_pretrain.txt'), 'w') as profiler_log:
                     profiler_log.write(table)
+
+                #write the profiler output to csv with custom function
+                save_events_table(p.key_averages(), os.path.join(args.model_dir, 'profiler_pretrain.csv'),row_limit=-1, top_level_events_only=True)
+
         else:
             
             ''' epoch loop '''
