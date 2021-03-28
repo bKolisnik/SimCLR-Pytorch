@@ -170,7 +170,7 @@ def pretrain(encoder, mlp, dataloaders, args):
 
                 #print(p.function_events)
                 table = p.key_averages().table(
-                    sort_by="self_cuda_time_total", row_limit=-1, top_level_events_only=True)
+                    sort_by="self_cuda_time_total", row_limit=-1, top_level_events_only=False)
                 print(table)
 
 
@@ -179,7 +179,7 @@ def pretrain(encoder, mlp, dataloaders, args):
                     profiler_log.write(table)
 
                 #write the profiler output to csv with custom function
-                save_events_table(p.key_averages(), os.path.join(args.model_dir, 'profiler_pretrain.csv'),row_limit=-1, top_level_events_only=True)
+                save_events_table(p.key_averages(), os.path.join(args.model_dir, 'profiler_pretrain.csv'),row_limit=-1, top_level_events_only=False)
 
         else:
             

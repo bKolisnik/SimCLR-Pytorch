@@ -452,7 +452,7 @@ def save_events_table(
                     src_field = evt.stack[0]
                 row_values.append(src_field)
 
-            writer.wrierow(row_values)
+            writer.writerow(row_values)
 
 
     with open(os.path.join(args.model_dir, 'final_times.txt'), 'w') as profiler_log:
