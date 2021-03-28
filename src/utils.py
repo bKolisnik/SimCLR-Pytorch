@@ -10,6 +10,7 @@ import math
 import torch
 from torch.utils.data import Dataset
 from torch.autograd.profiler import EventList, format_time, format_time_share, format_memory
+from torch.autograd import DeviceType
 import torch.nn as nn
 import csv
 
