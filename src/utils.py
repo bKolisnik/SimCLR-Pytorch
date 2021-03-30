@@ -301,6 +301,9 @@ def save_events_table(
         if evt.stack is not None and len(evt.stack) > 0:
             stacks.append(evt.stack)
     has_stack = len(stacks) > 0
+    print(f"Has stack: {has_stack}")
+
+    #time columns in microseconds, memory columns in bytes
 
     headers = [
         'Name',
@@ -402,6 +405,7 @@ def save_events_table(
                 event_limit += 1
             name = evt.key
 
+            '''
             row_values = [
                 name,
                 # Self CPU total %, 0 for async events.
@@ -412,28 +416,38 @@ def save_events_table(
                 format_time_share(evt.cpu_time_total, sum_self_cpu_time_total) if not evt.is_async else 0,
                 evt.cpu_time_total,  # CPU total
                 evt.cpu_time,  # CPU time avg
+            ]'''
+            row_values = [
+                name,
+                # Self CPU total %, 0 for async events.
+                (evt.self_cpu_time_total/sum_self_cpu_time_total),
+                evt.self_cpu_time_total,  # Self CPU total
+                # CPU total %, 0 for async events.
+                (evt.cpu_time_total / sum_self_cpu_time_total) if not evt.is_async else 0,
+                evt.cpu_time_total,  # CPU total
+                evt.cpu_time,  # CPU time avg
             ]
             if has_cuda_time:
                 row_values.extend([
-                    evt.self_cuda_time_total_str,
+                    evt.self_cuda_time_total,
                     # CUDA time total %
-                    format_time_share(evt.self_cuda_time_total, sum_self_cuda_time_total),
-                    evt.cuda_time_total_str,
-                    evt.cuda_time_str,  # Cuda time avg
+                    (evt.self_cuda_time_total/sum_self_cuda_time_total),
+                    evt.cuda_time_total,
+                    evt.cuda_time,  # Cuda time avg
                 ])
             if profile_memory:
                 row_values.extend([
                     # CPU Mem Total
-                    format_memory(evt.cpu_memory_usage),
+                    evt.cpu_memory_usage,
                     # Self CPU Mem Total
-                    format_memory(evt.self_cpu_memory_usage),
+                    evt.self_cpu_memory_usage,
                 ])
                 if has_cuda_mem:
                     row_values.extend([
                         # CUDA Mem Total
-                        format_memory(evt.cuda_memory_usage),
+                        evt.cuda_memory_usage,
                         # Self CUDA Mem Total
-                        format_memory(evt.self_cuda_memory_usage),
+                        evt.self_cuda_memory_usage,
                     ])
             row_values.append(
                 evt.count,  # Number of calls
