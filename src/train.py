@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from model.losses import SimclrCriterion
 from optimisers import get_optimiser
-from utils import save_events_table
+from utils import save_events_table, key_averages_with_stack
 
 def pretrain(encoder, mlp, dataloaders, args):
     ''' Pretrain script - SimCLR
@@ -170,7 +170,7 @@ def pretrain(encoder, mlp, dataloaders, args):
 
 
                 #print(p.function_events)
-                table = p.key_averages().table(
+                table = key_averages_with_stack(p.profiler.function_events).table(
                     sort_by="self_cuda_time_total", row_limit=-1, top_level_events_only=False)
                 print(table)
 

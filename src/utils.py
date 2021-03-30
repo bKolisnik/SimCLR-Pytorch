@@ -5,6 +5,7 @@ import numpy as np
 import time
 import random
 import math
+from collections import defaultdict, namedtuple
 
 
 import torch
@@ -473,3 +474,42 @@ def save_events_table(
         with open(times_path, 'w') as profiler_log:
             profiler_log.write("Self CPU time total: {}".format(format_time(sum_self_cpu_time_total)))
             profiler_log.write("Self CUDA time total: {}".format(format_time(sum_self_cuda_time_total)))
+
+
+def key_averages_with_stack(evtlist, group_by_input_shapes=False, group_by_stack_n=0):
+    """Averages all function events over their keys.
+        Args:
+            group_by_input_shapes: group entries by
+                (event name, input shapes) rather than just event name.
+                This is useful to see which input shapes contribute to the runtime
+                the most and may help with size-specific optimizations or
+                choosing the best candidates for quantization (aka fitting a roof line)
+            group_by_stack_n: group by top n stack trace entries
+        Returns:
+            An EventList containing FunctionEventAvg objects.
+        """
+
+    assert evtlist._tree_built
+    stats: Dict[Tuple[str, ...], FunctionEventAvg] = defaultdict(FunctionEventAvg)
+
+    def get_key(event, group_by_input_shapes, group_by_stack_n) -> Tuple[str, ...]:
+        key = [str(event.key), str(event.node_id), str(event.device_type), str(event.is_legacy)]
+        if group_by_input_shapes:
+            key.append(str(event.input_shapes))
+        if group_by_stack_n > 0:
+            key += event.stack[:group_by_stack_n]
+        return tuple(key)
+    for evt in evtlist:
+        stats[get_key(evt, group_by_input_shapes, group_by_stack_n)].add(evt)
+
+    avg_list = EventList(
+        stats.values(),
+        use_cuda=evtlist._use_cuda,
+        profile_memory=evtlist._profile_memory,
+        with_flops=evtlist._with_flops)
+    for evt in avg_list:
+        if group_by_stack_n > 0:
+            evt.stack = evt.stack[:group_by_stack_n]
+        if not group_by_input_shapes:
+            evt.input_shapes = ""
+    return avg_list
