@@ -181,7 +181,7 @@ def pretrain(encoder, mlp, dataloaders, args):
                     profiler_log.write(table)
 
                 #write the profiler output to csv with custom function
-                save_events_table(p.key_averages(), os.path.join(args.model_dir, 'profiler_pretrain.csv'),times_path=os.path.join(args.model_dir, 'final_times_pretrain.txt'),row_limit=-1, top_level_events_only=False)
+                save_events_table(key_averages_with_stack(p.profiler.function_events), os.path.join(args.model_dir, 'profiler_pretrain.csv'),times_path=os.path.join(args.model_dir, 'final_times_pretrain.txt'),row_limit=-1, top_level_events_only=False)
 
         else:
             
