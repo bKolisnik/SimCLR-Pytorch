@@ -174,7 +174,7 @@ def pretrain(encoder, mlp, dataloaders, args):
                     sort_by="self_cuda_time_total", row_limit=-1, top_level_events_only=False)
                 print(table)
 
-                p.export_stacks(args.model_dir,'self_cuda_time_total')
+                p.export_stacks(os.path.join(args.model_dir,'profiler_pretrain.stacks'),'self_cuda_time_total')
 
                 #write table to txt file
                 with open(os.path.join(args.model_dir, 'profiler_pretrain.txt'), 'w') as profiler_log:
