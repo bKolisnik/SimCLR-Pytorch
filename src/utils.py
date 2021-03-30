@@ -283,7 +283,8 @@ def save_events_table(
         max_src_column_width=75,
         with_flops=False,
         profile_memory=False,
-        top_level_events_only=False):
+        top_level_events_only=False,
+        only_save_root_call=False):
     """Prints a summary of events (which can be a list of FunctionEvent or FunctionEventAvg)."""
     if len(events) == 0:
         return ""
@@ -465,8 +466,10 @@ def save_events_table(
                 else:
                     row_values.append('{0:8.3f}'.format(evt.flops * flops_scale))
             if has_stack:
-                if len(evt.stack) > 0:
+                if (len(evt.stack) > 0) and only_save_root_call:
                     src_field = evt.stack[0]
+                elif not only_save_root_call:
+                    src_field = ",".join(evt.stack)
                 row_values.append(src_field)
 
             writer.writerow(row_values)
