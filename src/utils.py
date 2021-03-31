@@ -380,6 +380,7 @@ def save_events_table(
                 with_flops = False  # can't find any valid flops
         if has_stack:
             headers = headers + ['Source Location']
+        headers = headers + ['DeviceType']
         writer.writerow(headers)
 
 
@@ -471,6 +472,8 @@ def save_events_table(
                 elif not only_save_root_call:
                     src_field = ",".join(evt.stack)
                 row_values.append(src_field)
+
+            row_values.append(evt.device_type)
 
             writer.writerow(row_values)
 
