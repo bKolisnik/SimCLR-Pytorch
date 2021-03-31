@@ -50,10 +50,7 @@ def pretrain(encoder, mlp, dataloaders, args):
     best_valid_loss = np.inf
     patience_counter = 0
 
-    n_samples = len(dataloaders['train'])
-    print(f"n_samples: {n_samples}")
-    #num batches per epoch
-    n_batches = math.ceil(n_samples / args.batch_size)
+    n_batches = len(dataloaders['pretrain'])
     print(f"n_batches: {n_batches}")
 
     ''' Pretrain loop '''
@@ -464,10 +461,7 @@ def finetune(encoder, mlp, dataloaders, args):
     best_valid_acc = 0.0
     patience_counter = 0
 
-    n_samples = len(dataloaders['train'])
-    print(f"n_samples: {n_samples}")
-    #num batches per epoch
-    n_batches = math.ceil(n_samples / args.batch_size)
+    n_batches = len(dataloaders['train'])
     print(f"n_batches: {n_batches}")
     ''' Pretrain loop '''
     for epoch in range(args.finetune_epochs):
