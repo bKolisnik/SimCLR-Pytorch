@@ -4,6 +4,7 @@ import gc
 import logging
 import numpy as np
 from tqdm import tqdm
+import math
 
 import torch
 import torch.nn as nn
@@ -49,6 +50,9 @@ def pretrain(encoder, mlp, dataloaders, args):
     best_valid_loss = np.inf
     patience_counter = 0
 
+    n_samples = len(dataloaders['pretrain'])
+    #num batches per epoch
+    n_batches = math.ceil(n_samples / args.batch_size)
     #profiling over all epochs too costly, just do last epoch
 
     ''' Pretrain loop '''
@@ -77,8 +81,8 @@ def pretrain(encoder, mlp, dataloaders, args):
                     profile_memory=True,
                     with_stack=True,
                     schedule=torch.profiler.schedule(
-                    wait=14,
-                    warmup=0,
+                    wait=n_batches-3,
+                    warmup=1,
                     active=1,
                     repeat=0)
             ) as p:
@@ -459,7 +463,9 @@ def finetune(encoder, mlp, dataloaders, args):
     best_valid_acc = 0.0
     patience_counter = 0
 
-
+    n_samples = len(dataloaders['train'])
+    #num batches per epoch
+    n_batches = math.ceil(n_samples / args.batch_size)
     ''' Pretrain loop '''
     for epoch in range(args.finetune_epochs):
 
@@ -490,10 +496,10 @@ def finetune(encoder, mlp, dataloaders, args):
                             torch.profiler.ProfilerActivity.CUDA],
                         profile_memory=True,
                         schedule=torch.profiler.schedule(
-                        wait=14,
-                        warmup=0,
-                        active=1,
-                        repeat=0)
+                        wait=n_batches-3,
+                    warmup=1,
+                    active=1,
+                    repeat=0)
             ) as p:
 
                 ''' epoch loop '''
