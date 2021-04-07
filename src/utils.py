@@ -281,7 +281,7 @@ def save_events_table(
         header=None,
         row_limit=100,
         max_src_column_width=75,
-        with_flops=False,
+        with_flops=True,
         profile_memory=False,
         top_level_events_only=False,
         only_save_root_call=False):
@@ -362,6 +362,7 @@ def save_events_table(
     with open(path, 'w') as profiler_csv:
         writer = csv.writer(profiler_csv)
 
+        '''
         if with_flops:
             # Auto-scaling of flops header
             US_IN_SECOND = 1000.0 * 1000.0  # cpu_time_total is in us
@@ -377,7 +378,11 @@ def save_events_table(
                 (flops_scale, flops_header) = auto_scale_flops(min(raw_flops))
                 header = headers + flops_header
             else:
-                with_flops = False  # can't find any valid flops
+                with_flops = False  # can't find any valid flops'''
+        if with_flops:
+            flop_header = "FLOP"
+            headers = headers + flop_header
+        
         if has_stack:
             headers = headers + ['Source Location']
         headers = headers + ['DeviceType']
@@ -461,11 +466,14 @@ def save_events_table(
                 row_values.append(evt.node_id)
             if has_input_shapes:
                 row_values.append(str(evt.input_shapes))
+            
             if with_flops:
+                row_values.append(evt.flops)
+            '''if with_flops:
                 if evt.flops <= 0.0:
                     row_values.append("--")
                 else:
-                    row_values.append('{0:8.3f}'.format(evt.flops * flops_scale))
+                    row_values.append('{0:8.3f}'.format(evt.flops * flops_scale))'''
             if has_stack:
                 if (len(evt.stack) > 0) and only_save_root_call:
                     src_field = evt.stack[0]
