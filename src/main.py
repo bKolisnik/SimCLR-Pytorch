@@ -192,6 +192,12 @@ def main():
         logging.info('\npretrain/train: {} - valid: {} - test: {}'.format(
             len(dataloaders['train'].dataset), len(dataloaders['valid'].dataset),
             len(dataloaders['test'].dataset)))
+    
+    n_pretrain_batches = len(dataloaders['pretrain'])
+    n_train_batches = len(dataloaders['train'])
+    n_test_batches = len(dataloaders['test'])
+    logging.info('\npretrain_batches: {} - train_batches: {} - test_batches: {}'.format(
+            n_pretrain_batches, n_train_batches,n_test_batches))
 
     # launch model training or inference
     if not args.finetune:
