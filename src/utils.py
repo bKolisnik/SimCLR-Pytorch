@@ -380,7 +380,7 @@ def save_events_table(
             else:
                 with_flops = False  # can't find any valid flops'''
         if with_flops:
-            flop_header = "FLOP"
+            flop_header = ["FLOP"]
             headers = headers + flop_header
         
         if has_stack:
