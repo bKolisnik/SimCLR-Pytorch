@@ -161,7 +161,7 @@ def pretrain(encoder, mlp, dataloaders, args):
             ) as p:
                 with torch.profiler.record_function("model_pretraining_epoch"):
                 
-                    epoch_pretrain_loss = pretrain_train_epoch(encoder,mlp,train_dataloader,optimiser,criterion,lr_decay,epoch,profiler=p)
+                    epoch_pretrain_loss = pretrain_train_epoch(encoder,mlp,args,train_dataloader,optimiser,criterion,lr_decay,epoch,profiler=None)
 
                 #print(p.function_events)
                 table = key_averages_with_stack(p.profiler.function_events).table(
@@ -178,7 +178,7 @@ def pretrain(encoder, mlp, dataloaders, args):
                 save_events_table(key_averages_with_stack(p.profiler.function_events), os.path.join(args.model_dir, 'profiler_pretrain.csv'),times_path=os.path.join(args.model_dir, 'final_times_pretrain.txt'),row_limit=-1, top_level_events_only=False)
 
         else:
-            epoch_pretrain_loss = pretrain_train_epoch(encoder,mlp,train_dataloader,optimiser,criterion,lr_decay,epoch,profiler=None)
+            epoch_pretrain_loss = pretrain_train_epoch(encoder,mlp,args,train_dataloader,optimiser,criterion,lr_decay,epoch,profiler=None)
 
         # For the best performing epoch, reset patience and save model,
         # else update patience.
