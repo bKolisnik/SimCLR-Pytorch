@@ -243,6 +243,8 @@ def supervised_train_batch(inputs, target, encoder, mlp, optimiser, criterion, s
                 ).sum().item() / target.size(0)  # num corrects
 
     batch_top5 = acc_top5
+    if profiler is not None:
+        profiler.step()
 
     return batch_loss, batch_top1, batch_top5
 
