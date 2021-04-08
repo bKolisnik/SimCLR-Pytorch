@@ -206,6 +206,94 @@ def pretrain(encoder, mlp, dataloaders, args):
 
     gc.collect()  # release unreferenced memory
 
+def supervised_train_batch(inputs, target, encoder, mlp, optimiser, criterion, sample_count, run_loss, profiler=None):
+    inputs = inputs.cuda(non_blocking=True)
+
+    target = target.cuda(non_blocking=True)
+
+    # Forward pass
+    optimiser.zero_grad()
+
+    h = encoder(inputs)
+
+    # Take pretrained encoder representations
+    output = mlp(h)
+
+    loss = criterion(output, target)
+
+    loss.backward()
+
+    optimiser.step()
+
+    torch.cuda.synchronize()
+
+    sample_count += inputs.size(0)
+
+    batch_loss = loss.item()
+
+    predicted = output.argmax(1)
+
+    acc = (predicted == target).sum().item() / target.size(0)
+
+    batch_top1 = acc
+
+    _, output_topk = output.topk(5, 1, True, True)
+
+    acc_top5 = (output_topk == target.view(-1, 1).expand_as(output_topk)
+                ).sum().item() / target.size(0)  # num corrects
+
+    batch_top5 = acc_top5
+
+    return batch_loss, batch_top1, batch_top5
+
+def supervised_train_epoch(encoder, mlp, args, train_dataloader, optimiser, criterion,lr_decay,epoch,profiler=None):
+    ''' epoch loop '''
+    sample_count = 0
+    run_loss = 0
+    run_top1 = 0.0
+    run_top5 = 0.0
+
+    for i, (inputs, target) in enumerate(train_dataloader):
+        batch_loss, batch_top1, batch_top5  = supervised_train_batch(inputs, target, encoder, mlp, optimiser, criterion, sample_count, run_loss, profiler=profiler)
+        run_loss += batch_loss
+        run_top1 += batch_top1
+        run_top5 += batch_top5
+
+    epoch_pretrain_loss = run_loss / len(train_dataloader)  # sample_count
+    epoch_pretrain_acc = run_top1 / len(train_dataloader)
+    epoch_pretrain_acc_top5 = run_top5 / len(train_dataloader)
+
+    ''' Update Schedulers '''
+    # TODO: Improve / add lr_scheduler for warmup
+    if args.warmup_epochs > 0 and epoch+1 <= args.warmup_epochs:
+        wu_lr = (float(epoch+1) / args.warmup_epochs) * args.learning_rate
+        save_lr = optimiser.param_groups[0]['lr']
+        optimiser.param_groups[0]['lr'] = wu_lr
+    else:
+        # After warmup, decay lr with CosineAnnealingLR
+        lr_decay.step()
+
+    ''' Printing '''
+    if args.print_progress:  # only validate using process 0
+        logging.info('\n[Train] loss: {:.4f}'.format(epoch_pretrain_loss))
+
+        args.writer.add_scalars('supervised_epoch_acc', {
+                                'pretrain': epoch_pretrain_acc}, epoch+1)
+        args.writer.add_scalars('supervised_epoch_acc_top5', {
+                                'pretrain': epoch_pretrain_acc_top5}, epoch+1)
+        args.writer.add_scalars('epoch_loss', {'pretrain': epoch_pretrain_loss}, epoch+1)
+        args.writer.add_scalars('lr', {'pretrain': optimiser.param_groups[0]['lr']}, epoch+1)
+
+    state = {
+        #'args': args,
+        'encoder': encoder.state_dict(),
+        'mlp': mlp.state_dict(),
+        'optimiser': optimiser.state_dict(),
+        'epoch': epoch,
+    }
+
+    torch.save(state, args.checkpoint_dir)
+    return epoch_pretrain_loss
 
 def supervised(encoder, mlp, dataloaders, args):
     ''' Supervised Train script - SimCLR
@@ -241,17 +329,15 @@ def supervised(encoder, mlp, dataloaders, args):
     best_valid_loss = np.inf
     patience_counter = 0
 
+    n_batches = len(dataloaders['train'])
+    print(f"n_batches: {n_batches}")
+
     ''' Pretrain loop '''
     for epoch in range(args.n_epochs):
 
         # Train models
         encoder.train()
         mlp.train()
-
-        sample_count = 0
-        run_loss = 0
-        run_top1 = 0.0
-        run_top5 = 0.0
 
         # Print setup for distributed only printing on one node.
         if args.print_progress:
@@ -261,84 +347,35 @@ def supervised(encoder, mlp, dataloaders, args):
         else:
             train_dataloader = dataloaders['train']
 
-        ''' epoch loop '''
-        for i, (inputs, target) in enumerate(train_dataloader):
+        if(epoch == args.n_epochs - 1):
+            with torch.profiler.profile(
+                    activities=[
+                            torch.profiler.ProfilerActivity.CPU,
+                            torch.profiler.ProfilerActivity.CUDA],
+                        profile_memory=True,
+                        schedule=torch.profiler.schedule(
+                        wait=n_batches-3,
+                    warmup=1,
+                    active=1,
+                    repeat=0)
+                ) as p:
 
-            inputs = inputs.cuda(non_blocking=True)
+                epoch_pretrain_loss = supervised_train_epoch(encoder,mlp,args,train_dataloader,optimiser,criterion,lr_decay,epoch,profiler=p)
 
-            target = target.cuda(non_blocking=True)
+            table = key_averages_with_stack(p.profiler.function_events).table(
+                sort_by="self_cuda_time_total", row_limit=-1, top_level_events_only=False)
+            print(table)
 
-            # Forward pass
-            optimiser.zero_grad()
+            p.export_stacks(os.path.join(args.model_dir,'profiler_pretrain.stacks'),'self_cuda_time_total')
 
-            h = encoder(inputs)
+            #write table to txt file
+            with open(os.path.join(args.model_dir, 'profiler_pretrain_supervised.txt'), 'w') as profiler_log:
+                profiler_log.write(table)
 
-            # Take pretrained encoder representations
-            output = mlp(h)
-
-            loss = criterion(output, target)
-
-            loss.backward()
-
-            optimiser.step()
-
-            torch.cuda.synchronize()
-
-            sample_count += inputs.size(0)
-
-            run_loss += loss.item()
-
-            predicted = output.argmax(1)
-
-            acc = (predicted == target).sum().item() / target.size(0)
-
-            run_top1 += acc
-
-            _, output_topk = output.topk(5, 1, True, True)
-
-            acc_top5 = (output_topk == target.view(-1, 1).expand_as(output_topk)
-                        ).sum().item() / target.size(0)  # num corrects
-
-            run_top5 += acc_top5
-
-        epoch_pretrain_loss = run_loss / len(dataloaders['train'])  # sample_count
-
-        epoch_pretrain_acc = run_top1 / len(dataloaders['train'])
-
-        epoch_pretrain_acc_top5 = run_top5 / len(dataloaders['train'])
-
-        ''' Update Schedulers '''
-        # TODO: Improve / add lr_scheduler for warmup
-        if args.warmup_epochs > 0 and epoch+1 <= args.warmup_epochs:
-            wu_lr = (float(epoch+1) / args.warmup_epochs) * args.learning_rate
-            save_lr = optimiser.param_groups[0]['lr']
-            optimiser.param_groups[0]['lr'] = wu_lr
+            #write the profiler output to csv with custom function
+            save_events_table(key_averages_with_stack(p.profiler.function_events), os.path.join(args.model_dir, 'profiler_pretrain_supervised.csv'),times_path=os.path.join(args.model_dir, 'final_times_pretrain_supervised.txt'),row_limit=-1, top_level_events_only=False)
         else:
-            # After warmup, decay lr with CosineAnnealingLR
-            lr_decay.step()
-
-        ''' Printing '''
-        if args.print_progress:  # only validate using process 0
-            logging.info('\n[Train] loss: {:.4f}'.format(epoch_pretrain_loss))
-
-            args.writer.add_scalars('epoch_loss', {
-                                    'pretrain': epoch_pretrain_loss}, epoch+1)
-            args.writer.add_scalars('supervised_epoch_acc', {
-                                    'pretrain': epoch_pretrain_acc}, epoch+1)
-            args.writer.add_scalars('supervised_epoch_acc_top5', {
-                                    'pretrain': epoch_pretrain_acc_top5}, epoch+1)
-            args.writer.add_scalars('epoch_loss', {'pretrain': epoch_pretrain_loss}, epoch+1)
-            args.writer.add_scalars('lr', {'pretrain': optimiser.param_groups[0]['lr']}, epoch+1)
-
-        state = {
-            #'args': args,
-            'encoder': encoder.state_dict(),
-            'mlp': mlp.state_dict(),
-            'optimiser': optimiser.state_dict(),
-            'epoch': epoch,
-        }
-
-        torch.save(state, args.checkpoint_dir)
+            epoch_pretrain_loss = supervised_train_epoch(encoder,mlp,args,train_dataloader,optimiser,criterion,lr_decay,epoch,profiler=None)
 
         # For the best performing epoch, reset patience and save model,
         # else update patience.
@@ -358,8 +395,6 @@ def supervised(encoder, mlp, dataloaders, args):
                 break
 
         epoch_pretrain_loss = None  # reset loss
-
-    del state
 
     torch.cuda.empty_cache()
 
@@ -413,107 +448,47 @@ def finetune(encoder, mlp, dataloaders, args):
         else:
             train_dataloader = dataloaders['train']
 
+        ''' epoch loop '''
+        for i, (inputs, target) in enumerate(train_dataloader):
 
-        if(epoch == args.finetune_epochs - 1):
+            inputs = inputs.cuda(non_blocking=True)
 
+            target = target.cuda(non_blocking=True)
 
-            with torch.profiler.profile(
-                    activities=[
-                            torch.profiler.ProfilerActivity.CPU,
-                            torch.profiler.ProfilerActivity.CUDA],
-                        profile_memory=True,
-                        schedule=torch.profiler.schedule(
-                        wait=n_batches-3,
-                    warmup=1,
-                    active=1,
-                    repeat=0)
-            ) as p:
+            # Forward pass
+            optimiser.zero_grad()
 
-                ''' epoch loop '''
-                for i, (inputs, target) in enumerate(train_dataloader):
+            # Do not compute the gradients for the frozen encoder
+            with torch.no_grad():
+                h = encoder(inputs)
 
-                    inputs = inputs.cuda(non_blocking=True)
+            # Take pretrained encoder representations
+            output = mlp(h)
 
-                    target = target.cuda(non_blocking=True)
+            loss = criterion(output, target)
 
-                    # Forward pass
-                    optimiser.zero_grad()
+            loss.backward()
 
-                    # Do not compute the gradients for the frozen encoder
-                    with torch.no_grad():
-                        h = encoder(inputs)
+            optimiser.step()
 
-                    # Take pretrained encoder representations
-                    output = mlp(h)
+            torch.cuda.synchronize()
 
-                    loss = criterion(output, target)
+            sample_count += inputs.size(0)
 
-                    loss.backward()
+            run_loss += loss.item()
 
-                    optimiser.step()
+            predicted = output.argmax(1)
 
-                    torch.cuda.synchronize()
+            acc = (predicted == target).sum().item() / target.size(0)
 
-                    sample_count += inputs.size(0)
+            run_top1 += acc
 
-                    run_loss += loss.item()
+            _, output_topk = output.topk(5, 1, True, True)
 
-                    predicted = output.argmax(1)
+            acc_top5 = (output_topk == target.view(-1, 1).expand_as(output_topk)
+                        ).sum().item() / target.size(0)  # num corrects
 
-                    acc = (predicted == target).sum().item() / target.size(0)
-
-                    run_top1 += acc
-
-                    _, output_topk = output.topk(5, 1, True, True)
-
-                    acc_top5 = (output_topk == target.view(-1, 1).expand_as(output_topk)
-                                ).sum().item() / target.size(0)  # num corrects
-
-                    run_top5 += acc_top5
-
-                    p.step()
-        else:
-            ''' epoch loop '''
-            for i, (inputs, target) in enumerate(train_dataloader):
-
-                inputs = inputs.cuda(non_blocking=True)
-
-                target = target.cuda(non_blocking=True)
-
-                # Forward pass
-                optimiser.zero_grad()
-
-                # Do not compute the gradients for the frozen encoder
-                with torch.no_grad():
-                    h = encoder(inputs)
-
-                # Take pretrained encoder representations
-                output = mlp(h)
-
-                loss = criterion(output, target)
-
-                loss.backward()
-
-                optimiser.step()
-
-                torch.cuda.synchronize()
-
-                sample_count += inputs.size(0)
-
-                run_loss += loss.item()
-
-                predicted = output.argmax(1)
-
-                acc = (predicted == target).sum().item() / target.size(0)
-
-                run_top1 += acc
-
-                _, output_topk = output.topk(5, 1, True, True)
-
-                acc_top5 = (output_topk == target.view(-1, 1).expand_as(output_topk)
-                            ).sum().item() / target.size(0)  # num corrects
-
-                run_top5 += acc_top5
+            run_top5 += acc_top5
 
         epoch_finetune_loss = run_loss / len(dataloaders['train'])  # sample_count
 
@@ -537,6 +512,8 @@ def finetune(encoder, mlp, dataloaders, args):
             args.writer.add_scalars(
                 'finetune_lr', {'train': optimiser.param_groups[0]['lr']}, epoch+1)
 
+
+        #Log the validation losses.
         valid_loss, valid_acc, valid_acc_top5 = evaluate(
             encoder, mlp, dataloaders, 'valid', epoch, args)
 
@@ -571,16 +548,7 @@ def finetune(encoder, mlp, dataloaders, args):
         epoch_finetune_loss = None  # reset loss
         epoch_finetune_acc = None
         epoch_finetune_acc_top5 = None
-
-    table = p.key_averages().table(
-        sort_by="self_cuda_time_total", row_limit=-1)
-    print(table)
-
-    #write table to txt file
-    with open(os.path.join(args.model_dir, 'profiler_finetune.txt'), 'w') as profiler_log:
-        profiler_log.write(table)
         
-
     del state
 
     torch.cuda.empty_cache()
@@ -674,7 +642,7 @@ def evaluate(encoder, mlp, dataloaders, mode, epoch, args):
             args.writer.add_scalars('finetune_epoch_loss', {mode: epoch_valid_loss}, epoch+1)
             args.writer.add_scalars('finetune_epoch_acc', {mode: epoch_valid_acc}, epoch+1)
             args.writer.add_scalars('finetune_epoch_acc_top5', {
-                                    'train': epoch_valid_acc_top5}, epoch+1)
+                                    mode: epoch_valid_acc_top5}, epoch+1)
 
     torch.cuda.empty_cache()
 

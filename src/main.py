@@ -15,6 +15,7 @@ from train import finetune, evaluate, pretrain, supervised
 from datasets import get_dataloaders
 from utils import experiment_config, print_network, init_weights
 import model.network as models
+import time
 
 
 warnings.filterwarnings("ignore")
@@ -199,6 +200,9 @@ def main():
     logging.info('\npretrain_batches: {} - train_batches: {} - test_batches: {}'.format(
             n_pretrain_batches, n_train_batches,n_test_batches))
 
+    #time the model training process
+    start = time.time()
+
     # launch model training or inference
     if not args.finetune:
 
@@ -225,7 +229,7 @@ def main():
 
         # Supervised Finetuning of the supervised classification head
         finetune(base_encoder, sup_head, dataloaders, args)
-
+        end = time.time()
         # Evaluate the pretrained model and trained supervised head
         test_loss, test_acc, test_acc_top5 = evaluate(
             base_encoder, sup_head, dataloaders, 'test', args.finetune_epochs, args)
@@ -254,7 +258,7 @@ def main():
 
         # Supervised Finetuning of the supervised classification head
         finetune(base_encoder, sup_head, dataloaders, args)
-
+        end = time.time()
         # Evaluate the pretrained model and trained supervised head
         test_loss, test_acc, test_acc_top5 = evaluate(
             base_encoder, sup_head, dataloaders, 'test', args.finetune_epochs, args)
@@ -264,6 +268,9 @@ def main():
 
         if args.distributed:  # cleanup
             torch.distributed.destroy_process_group()
+
+    with open(os.path.join(args.model_dir, 'runtime.txt'), 'w') as logs:
+        logs.write('{0}'.format(str(end-start),))
 
 
 if __name__ == '__main__':
