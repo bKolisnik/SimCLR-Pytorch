@@ -16,6 +16,83 @@ from model.losses import SimclrCriterion
 from optimisers import get_optimiser
 from utils import save_events_table, key_averages_with_stack
 
+def pretrain_train_batch(inputs, encoder, mlp, optimiser, criterion, sample_count, run_loss, profiler=None):
+    inputs = inputs.cuda(non_blocking=True)
+
+    # Forward pass
+    optimiser.zero_grad()
+
+    # retrieve the 2 views
+    x_i, x_j = torch.split(inputs, [3, 3], dim=1)
+
+    # Get the encoder representation
+    h_i = encoder(x_i)
+
+    h_j = encoder(x_j)
+
+    # Get the nonlinear transformation of the representation
+    z_i = mlp(h_i)
+
+    z_j = mlp(h_j)
+
+    # Calculate NT_Xent loss
+    loss = criterion(z_i, z_j)
+
+    loss.backward()
+
+    optimiser.step()
+
+    torch.cuda.synchronize()
+
+    sample_count += inputs.size(0)
+
+    batch_loss = loss.item()
+
+    if profiler is not None:
+        profiler.step()
+    return batch_loss
+
+def pretrain_train_epoch(encoder, mlp, args, train_dataloader, optimiser, criterion,lr_decay,epoch,profiler=None):
+    ''' epoch loop '''
+
+    sample_count = 0
+    run_loss = 0
+
+    for i, (inputs, _) in enumerate(train_dataloader):
+
+
+        run_loss += pretrain_train_batch(inputs, encoder, mlp, optimiser, criterion, sample_count, run_loss, profiler=profiler)
+
+    epoch_pretrain_loss = run_loss / len(train_dataloader)
+
+    ''' Update Schedulers '''
+    # TODO: Improve / add lr_scheduler for warmup
+    if args.warmup_epochs > 0 and epoch+1 <= args.warmup_epochs:
+        wu_lr = (float(epoch+1) / args.warmup_epochs) * args.learning_rate
+        save_lr = optimiser.param_groups[0]['lr']
+        optimiser.param_groups[0]['lr'] = wu_lr
+    else:
+        # After warmup, decay lr with CosineAnnealingLR
+        lr_decay.step()
+
+    ''' Printing '''
+    if args.print_progress:  # only validate using process 0
+        logging.info('\n[Train] loss: {:.4f}'.format(epoch_pretrain_loss))
+
+        args.writer.add_scalars('epoch_loss', {'pretrain': epoch_pretrain_loss}, epoch+1)
+        args.writer.add_scalars('lr', {'pretrain': optimiser.param_groups[0]['lr']}, epoch+1)
+
+    state = {
+        #'args': args,
+        'encoder': encoder.state_dict(),
+        'mlp': mlp.state_dict(),
+        'optimiser': optimiser.state_dict(),
+        'epoch': epoch,
+    }
+
+    torch.save(state, args.checkpoint_dir)
+    return epoch_pretrain_loss
+
 def pretrain(encoder, mlp, dataloaders, args):
     ''' Pretrain script - SimCLR
 
@@ -60,9 +137,6 @@ def pretrain(encoder, mlp, dataloaders, args):
         encoder.train()
         mlp.train()
 
-        sample_count = 0
-        run_loss = 0
-
         # Print setup for distributed only printing on one node.
         if args.print_progress:
             logging.info('\nEpoch {}/{}:\n'.format(epoch+1, args.n_epochs))
@@ -87,90 +161,7 @@ def pretrain(encoder, mlp, dataloaders, args):
             ) as p:
                 with torch.profiler.record_function("model_pretraining_epoch"):
                 
-                    ''' epoch loop '''
-                    for i, (inputs, _) in enumerate(train_dataloader):
-
-                        inputs = inputs.cuda(non_blocking=True)
-
-                        # Forward pass
-                        optimiser.zero_grad()
-
-                        # retrieve the 2 views
-                        x_i, x_j = torch.split(inputs, [3, 3], dim=1)
-
-                        # Get the encoder representation
-                        h_i = encoder(x_i)
-
-                        h_j = encoder(x_j)
-
-                        # Get the nonlinear transformation of the representation
-                        z_i = mlp(h_i)
-
-                        z_j = mlp(h_j)
-
-                        # Calculate NT_Xent loss
-                        loss = criterion(z_i, z_j)
-
-                        loss.backward()
-
-                        optimiser.step()
-
-                        torch.cuda.synchronize()
-
-                        sample_count += inputs.size(0)
-
-                        run_loss += loss.item()
-
-                        p.step()
-
-                    epoch_pretrain_loss = run_loss / len(dataloaders['pretrain'])
-
-                    ''' Update Schedulers '''
-                    # TODO: Improve / add lr_scheduler for warmup
-                    if args.warmup_epochs > 0 and epoch+1 <= args.warmup_epochs:
-                        wu_lr = (float(epoch+1) / args.warmup_epochs) * args.learning_rate
-                        save_lr = optimiser.param_groups[0]['lr']
-                        optimiser.param_groups[0]['lr'] = wu_lr
-                    else:
-                        # After warmup, decay lr with CosineAnnealingLR
-                        lr_decay.step()
-
-                    ''' Printing '''
-                    if args.print_progress:  # only validate using process 0
-                        logging.info('\n[Train] loss: {:.4f}'.format(epoch_pretrain_loss))
-
-                        args.writer.add_scalars('epoch_loss', {'pretrain': epoch_pretrain_loss}, epoch+1)
-                        args.writer.add_scalars('lr', {'pretrain': optimiser.param_groups[0]['lr']}, epoch+1)
-
-                    state = {
-                        #'args': args,
-                        'encoder': encoder.state_dict(),
-                        'mlp': mlp.state_dict(),
-                        'optimiser': optimiser.state_dict(),
-                        'epoch': epoch,
-                    }
-
-                    torch.save(state, args.checkpoint_dir)
-
-                    # For the best performing epoch, reset patience and save model,
-                    # else update patience.
-                    if epoch_pretrain_loss <= best_valid_loss:
-                        patience_counter = 0
-                        best_epoch = epoch + 1
-                        best_valid_loss = epoch_pretrain_loss
-
-                    else:
-                        patience_counter += 1
-                        if patience_counter == (args.patience - 10):
-                            logging.info('\nPatience counter {}/{}.'.format(
-                                patience_counter, args.patience))
-                        elif patience_counter == args.patience:
-                            logging.info('\nEarly stopping... no improvement after {} Epochs.'.format(
-                                args.patience))
-                            break
-
-                    epoch_pretrain_loss = None  # reset loss
-
+                    epoch_pretrain_loss = pretrain_train_epoch(encoder,mlp,train_dataloader,optimiser,criterion,lr_decay,epoch,profiler=p)
 
                 #print(p.function_events)
                 table = key_averages_with_stack(p.profiler.function_events).table(
@@ -187,91 +178,29 @@ def pretrain(encoder, mlp, dataloaders, args):
                 save_events_table(key_averages_with_stack(p.profiler.function_events), os.path.join(args.model_dir, 'profiler_pretrain.csv'),times_path=os.path.join(args.model_dir, 'final_times_pretrain.txt'),row_limit=-1, top_level_events_only=False)
 
         else:
-            
-            ''' epoch loop '''
-            for i, (inputs, _) in enumerate(train_dataloader):
+            epoch_pretrain_loss = pretrain_train_epoch(encoder,mlp,train_dataloader,optimiser,criterion,lr_decay,epoch,profiler=None)
 
-                inputs = inputs.cuda(non_blocking=True)
+        # For the best performing epoch, reset patience and save model,
+        # else update patience.
+        if epoch_pretrain_loss <= best_valid_loss:
+            patience_counter = 0
+            best_epoch = epoch + 1
+            best_valid_loss = epoch_pretrain_loss
 
-                # Forward pass
-                optimiser.zero_grad()
+        else:
+            patience_counter += 1
+            if patience_counter == (args.patience - 10):
+                logging.info('\nPatience counter {}/{}.'.format(
+                    patience_counter, args.patience))
+            elif patience_counter == args.patience:
+                logging.info('\nEarly stopping... no improvement after {} Epochs.'.format(
+                    args.patience))
+                break
 
-                # retrieve the 2 views
-                x_i, x_j = torch.split(inputs, [3, 3], dim=1)
-
-                # Get the encoder representation
-                h_i = encoder(x_i)
-
-                h_j = encoder(x_j)
-
-                # Get the nonlinear transformation of the representation
-                z_i = mlp(h_i)
-
-                z_j = mlp(h_j)
-
-                # Calculate NT_Xent loss
-                loss = criterion(z_i, z_j)
-
-                loss.backward()
-
-                optimiser.step()
-
-                torch.cuda.synchronize()
-
-                sample_count += inputs.size(0)
-
-                run_loss += loss.item()
-
-            epoch_pretrain_loss = run_loss / len(dataloaders['pretrain'])
-
-            ''' Update Schedulers '''
-            # TODO: Improve / add lr_scheduler for warmup
-            if args.warmup_epochs > 0 and epoch+1 <= args.warmup_epochs:
-                wu_lr = (float(epoch+1) / args.warmup_epochs) * args.learning_rate
-                save_lr = optimiser.param_groups[0]['lr']
-                optimiser.param_groups[0]['lr'] = wu_lr
-            else:
-                # After warmup, decay lr with CosineAnnealingLR
-                lr_decay.step()
-
-            ''' Printing '''
-            if args.print_progress:  # only validate using process 0
-                logging.info('\n[Train] loss: {:.4f}'.format(epoch_pretrain_loss))
-
-                args.writer.add_scalars('epoch_loss', {'pretrain': epoch_pretrain_loss}, epoch+1)
-                args.writer.add_scalars('lr', {'pretrain': optimiser.param_groups[0]['lr']}, epoch+1)
-
-            state = {
-                #'args': args,
-                'encoder': encoder.state_dict(),
-                'mlp': mlp.state_dict(),
-                'optimiser': optimiser.state_dict(),
-                'epoch': epoch,
-            }
-
-            torch.save(state, args.checkpoint_dir)
-
-            # For the best performing epoch, reset patience and save model,
-            # else update patience.
-            if epoch_pretrain_loss <= best_valid_loss:
-                patience_counter = 0
-                best_epoch = epoch + 1
-                best_valid_loss = epoch_pretrain_loss
-
-            else:
-                patience_counter += 1
-                if patience_counter == (args.patience - 10):
-                    logging.info('\nPatience counter {}/{}.'.format(
-                        patience_counter, args.patience))
-                elif patience_counter == args.patience:
-                    logging.info('\nEarly stopping... no improvement after {} Epochs.'.format(
-                        args.patience))
-                    break
-
-            epoch_pretrain_loss = None  # reset loss
+        epoch_pretrain_loss = None  # reset loss
 
 
-    del state
+    #del state
 
     torch.cuda.empty_cache()
 
