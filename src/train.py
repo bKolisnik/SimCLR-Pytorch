@@ -355,6 +355,8 @@ def supervised(encoder, mlp, dataloaders, args):
                             torch.profiler.ProfilerActivity.CPU,
                             torch.profiler.ProfilerActivity.CUDA],
                         profile_memory=True,
+                        with_stack=True,
+                        with_flops=True,
                         schedule=torch.profiler.schedule(
                         wait=n_batches-3,
                     warmup=1,
